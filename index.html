@@ -229,8 +229,14 @@ void main() {
 
   float prev = texture2D(uPrev, vUv).r;
 
+  // Localization: blend neighbor avg toward the centre value to suppress
+  // wave propagation. 0.0 = full propagation, 1.0 = pure local oscillation.
+  // Higher value => ripples stay near where they were created (per-finger blobs)
+  const float LOCALIZE = 0.62;
+  float coupled = mix(avg, c, LOCALIZE);
+
   // Verlet
-  float val = avg * 2.0 - prev;
+  float val = coupled * 2.0 - prev;
 
   // Non-linear amplitude-dependent damping
   float ampFactor = 1.0 - smoothstep(0.0, 0.08, abs(val)) * 0.006;
