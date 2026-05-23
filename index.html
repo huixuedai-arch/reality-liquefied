@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Reality Liquefied</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #000;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    color: #fff;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+  }
+  #canvas {
+    position: fixed; inset: 0;
+    width: 100%; height: 100%;
+    display: block;
+    touch-action: none;
+    background: #000;
+  }
+  #video { display: none; }
+  #loading {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: #000;
+    color: #fff;
+    font-size: 18px;
+    letter-spacing: 0.15em;
+    z-index: 100;
+    transition: opacity 0.6s ease-out;
+  }
+  #loading.hidden { opacity: 0; pointer-events: none; }
+  #error {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.85);
+    color: #ff6b6b;
+    padding: 20px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    z-index: 200;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .ui {
+    position: fixed;
+    z-index: 50;
+    transition: opacity 0.3s ease;
+    pointer-events: auto;
+    touch-action: auto;
+  }
+  .ui input, .ui button { pointer-events: auto; touch-action: auto; }
+  .ui.hidden-ui { opacity: 0; pointer-events: none; }
+  .top-right {
+    top: max(12px, env(safe-area-inset-top));
+    right: max(12px, env(safe-area-inset-right));
+    display: flex; gap: 8px;
+  }
+  .bottom-bar {
+    bottom: max(16px, env(safe-area-inset-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(560px, calc(100% - 24px));
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 14px 16px;
+    background: rgba(15, 15, 20, 0.45);
+    backdrop-filter: blur(14px) saturate(160%);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    border-radius: 18px;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .modes {
+    display: flex; gap: 8px; justify-content: center;
+  }
+  button {
+    font: inherit;
+    color: #fff;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.12);
+    padding: 8px 14px;
+    border-radius: 10px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    letter-spacing: 0.1em;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:hover { background: rgba(255,255,255,0.12); }
+  button.active {
+    background: rgba(120, 200, 255, 0.2);
+    border-color: rgba(120, 200, 255, 0.55);
+    color: #d8f0ff;
+  }
+  .sliders {
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .sliders label {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 10px; letter-spacing: 0.18em;
+    color: rgba(255,255,255,0.75);
+  }
+  .sliders label > .name { min-width: 76px; }
+  .sliders label > .val {
+    min-width: 42px; text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: #d8f0ff;
+    letter-spacing: 0.05em;
+  }
+  .sliders input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    flex: 1;
+    height: 3px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    outline: none;
+  }
+  .sliders input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 16px; height: 16px;
+    background: #d8f0ff;
+    border-radius: 50%;
+    border: none;
+    box-shadow: 0 0 8px rgba(120,200,255,0.55);
+  }
+  .sliders input[type="range"]::-moz-range-thumb {
+    width: 16px; height: 16px;
+    background: #d8f0ff;
+    border-radius: 50%;
+    border: none;
+  }
+  #showUiBtn {
+    position: fixed;
+    bottom: max(16px, env(safe-area-inset-bottom));
+    right: max(12px, env(safe-area-inset-right));
+    z-index: 60;
+    display: none;
+  }
+  #showUiBtn.visible { display: block; }
+</style>
+</head>
+<body>
+
+<div id="loading">Initializing Reality…</div>
+<pre id="error"></pre>
+
+<canvas id="canvas"></canvas>
+<video id="video" autoplay playsinline muted></video>
+
+<div id="topUi" class="ui top-right">
+  <button id="switchCam">SWITCH CAM</button>
+  <button id="hideUi">HIDE UI</button>
+</div>
+
+<div id="bottomUi" class="ui bottom-bar">
+  <div class="modes">
+    <button id="modeLiquid" class="active">LIQUID</button>
+    <button id="modeCrystal">CRYSTAL</button>
+  </div>
+  <div class="sliders">
+    <label><span class="name">INTENSITY</span><input id="intensity" type="range" min="0.1" max="3.0" step="0.01" value="1.0"><span class="val" id="intensityVal">1.00</span></label>
+    <label><span class="name">RADIUS</span><input id="radius" type="range" min="0.2" max="4.0" step="0.01" value="1.0"><span class="val" id="radiusVal">1.00</span></label>
+    <label><span class="name">DECAY</span><input id="decay" type="range" min="0.85" max="0.995" step="0.001" value="0.985"><span class="val" id="decayVal">0.985</span></label>
+  </div>
+</div>
+
+<button id="showUiBtn">SHOW UI</button>
+
+<!-- ====================== SHADERS ====================== -->
+
+<script type="x-shader/x-vertex" id="vs-quad">
+attribute vec2 aPosition;
+varying vec2 vUv;
+void main() {
+  vUv = aPosition * 0.5 + 0.5;
+  gl_Position = vec4(aPosition, 0.0, 1.0);
+}
+</script>
+
+<script type="x-shader/x-fragment" id="fs-physics">
+precision highp float;
+
+uniform sampler2D uCurrent;
+uniform sampler2D uPrev;
+uniform vec2 uResolution;
+uniform vec3 uFingers[10];
+uniform vec3 uPrevFingers[10];
+uniform float uDamping;
+uniform float uRadius;
+uniform float uAspect;
+uniform float uTime;
+
+varying vec2 vUv;
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float capsuleSDF(vec2 p, vec2 a, vec2 b, float r) {
+  vec2 pa = p - a;
+  vec2 ba = b - a;
+  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-7), 0.0, 1.0);
+  return length(pa - ba * h) - r;
+}
+
+void main() {
+  vec2 texel = 1.0 / uResolution;
+
+  // 9-tap isotropic stencil
+  float c  = texture2D(uCurrent, vUv).r;
+  float l  = texture2D(uCurrent, vUv + vec2(-texel.x, 0.0)).r;
+  float r  = texture2D(uCurrent, vUv + vec2( texel.x, 0.0)).r;
+  float u  = texture2D(uCurrent, vUv + vec2(0.0,  texel.y)).r;
+  float d  = texture2D(uCurrent, vUv + vec2(0.0, -texel.y)).r;
+  float lu = texture2D(uCurrent, vUv + vec2(-texel.x,  texel.y)).r;
+  float ru = texture2D(uCurrent, vUv + vec2( texel.x,  texel.y)).r;
+  float ld = texture2D(uCurrent, vUv + vec2(-texel.x, -texel.y)).r;
+  float rd = texture2D(uCurrent, vUv + vec2( texel.x, -texel.y)).r;
+
+  float avg = (l + r + u + d) * 0.2 + (lu + ru + ld + rd) * 0.05;
+
+  float prev = texture2D(uPrev, vUv).r;
+
+  // Verlet
+  float val = avg * 2.0 - prev;
+
+  // Non-linear amplitude-dependent damping
+  float ampFactor = 1.0 - smoothstep(0.0, 0.08, abs(val)) * 0.006;
+  val *= uDamping * ampFactor;
+
+  // Ambient noise (very low amplitude)
+  float n = hash(vUv * 1000.0 + vec2(uTime, uTime * 1.37)) - 0.5;
+  val += n * 0.0006;
+
+  // Finger interaction via capsule SDF in aspect-corrected UV
+  vec2 aspectUv = vec2(vUv.x * uAspect, vUv.y);
+  float baseRadius = 0.038 * uRadius;
+  float force = 0.0;
+
+  for (int i = 0; i < 10; i++) {
+    if (uFingers[i].z < 0.5) continue;
+    vec2 fa = vec2(uFingers[i].x * uAspect, uFingers[i].y);
+    vec2 fb = vec2(uPrevFingers[i].x * uAspect, uPrevFingers[i].y);
+
+    // velocity in approximate pixel units
+    float velPx = length(fa - fb) * uResolution.y;
+    float strength = 0.6 + clamp(velPx * 0.012, 0.0, 1.2);
+
+    float dist = capsuleSDF(aspectUv, fa, fb, baseRadius);
+    float falloff = smoothstep(baseRadius, -baseRadius * 0.5, dist);
+
+    force += strength * falloff;
+  }
+
+  // clamp the total contribution to avoid 5-finger blow-up
+  force = clamp(force, 0.0, 2.4);
+  val += force * 0.085;
+
+  val = clamp(val, -1.2, 1.2);
+
+  gl_FragColor = vec4(val, 0.0, 0.0, 1.0);
+}
+</script>
+
+<script type="x-shader/x-fragment" id="fs-render">
+precision highp float;
+
+uniform sampler2D uPhysics;
+uniform sampler2D uVideo;
+uniform vec2 uResolution;
+uniform vec2 uPhysicsRes;
+uniform vec2 uVideoScale;
+uniform float uIntensity;
+uniform float uMirror;
+uniform float uMode; // 0 = LIQUID, 1 = CRYSTAL
+
+varying vec2 vUv;
+
+vec2 toVideoUv(vec2 uv) {
+  vec2 v = (uv - 0.5) * uVideoScale + 0.5;
+  v.x = mix(v.x, 1.0 - v.x, uMirror);
+  return v;
+}
+
+void main() {
+  vec2 texel = 1.0 / uPhysicsRes;
+  float aspect = uResolution.x / uResolution.y;
+
+  // 3x3 samples of physics
+  float tl = texture2D(uPhysics, vUv + vec2(-texel.x,  texel.y)).r;
+  float tc = texture2D(uPhysics, vUv + vec2(0.0,       texel.y)).r;
+  float tr = texture2D(uPhysics, vUv + vec2( texel.x,  texel.y)).r;
+  float ml = texture2D(uPhysics, vUv + vec2(-texel.x, 0.0)).r;
+  float mc = texture2D(uPhysics, vUv).r;
+  float mr = texture2D(uPhysics, vUv + vec2( texel.x, 0.0)).r;
+  float bl = texture2D(uPhysics, vUv + vec2(-texel.x, -texel.y)).r;
+  float bc = texture2D(uPhysics, vUv + vec2(0.0,      -texel.y)).r;
+  float br = texture2D(uPhysics, vUv + vec2( texel.x, -texel.y)).r;
+
+  // Sobel gradient
+  float dx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl);
+  float dy = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
+  vec2 grad = vec2(dx, dy) * 0.125;
+  float gradLen = length(grad);
+
+  // Laplacian
+  float lap = (tc + bc + ml + mr) * 0.25 - mc;
+
+  // ============================ LIQUID ============================
+  vec2 aspectFix = vec2(1.0 / aspect, 1.0);
+
+  vec2 refractOffset = grad * 0.55 * uIntensity * aspectFix;
+
+  vec2 gradNorm = gradLen > 1e-6 ? grad / gradLen : vec2(0.0);
+  vec2 lensOffset = gradNorm * lap * 0.18 * uIntensity * aspectFix;
+
+  vec2 totalOffset = refractOffset + lensOffset;
+
+  float dispersion = 0.015 + clamp(gradLen * 0.20, 0.0, 0.14);
+  vec2 offR = totalOffset * (1.0 + dispersion);
+  vec2 offG = totalOffset;
+  vec2 offB = totalOffset * (1.0 - dispersion);
+
+  vec2 tangent = vec2(-totalOffset.y, totalOffset.x) * 0.15;
+
+  // 3-tap soft sample along tangent of offset direction per channel
+  float rC = (
+    texture2D(uVideo, toVideoUv(vUv + offR - tangent)).r +
+    texture2D(uVideo, toVideoUv(vUv + offR)).r +
+    texture2D(uVideo, toVideoUv(vUv + offR + tangent)).r
+  ) / 3.0;
+  float gC = (
+    texture2D(uVideo, toVideoUv(vUv + offG - tangent)).g +
+    texture2D(uVideo, toVideoUv(vUv + offG)).g +
+    texture2D(uVideo, toVideoUv(vUv + offG + tangent)).g
+  ) / 3.0;
+  float bC = (
+    texture2D(uVideo, toVideoUv(vUv + offB - tangent)).b +
+    texture2D(uVideo, toVideoUv(vUv + offB)).b +
+    texture2D(uVideo, toVideoUv(vUv + offB + tangent)).b
+  ) / 3.0;
+
+  vec3 liquidColor = vec3(rC, gC, bC);
+
+  // Brightness from wave depth
+  float bright = 1.0 + clamp(mc * 2.2, -0.38, 0.45);
+  liquidColor *= bright;
+
+  // Crest warm, trough cool
+  if (mc > 0.0) {
+    liquidColor = mix(liquidColor, liquidColor * vec3(1.06, 1.02, 0.94), clamp(mc * 3.0, 0.0, 1.0));
+  } else {
+    liquidColor = mix(liquidColor, liquidColor * vec3(0.78, 0.90, 1.08), clamp(-mc * 3.0, 0.0, 1.0));
+  }
+
+  // Normal for Fresnel + specular
+  vec3 normal = normalize(vec3(-grad.x, -grad.y, 0.8 / (uIntensity + 0.01)));
+  vec3 viewDir = vec3(0.0, 0.0, 1.0);
+  float cosTheta = max(dot(normal, viewDir), 0.0);
+  float fresnel = 0.02 + 0.98 * pow(1.0 - cosTheta, 5.0);
+
+  vec2 reflOff = totalOffset * -1.6 * aspectFix;
+  vec3 reflColor = texture2D(uVideo, toVideoUv(vUv + reflOff)).rgb;
+  reflColor = mix(reflColor, reflColor * vec3(0.78, 0.90, 1.18) + vec3(0.0, 0.02, 0.05), 0.55);
+  liquidColor = mix(liquidColor, reflColor, fresnel * 0.5);
+
+  // Specular (twin-lobe)
+  vec3 lightDir = normalize(vec3(0.4, 0.7, 1.0));
+  vec3 halfDir = normalize(lightDir + viewDir);
+  float NdotH = max(dot(normal, halfDir), 0.0);
+  float specSharp = pow(NdotH, 180.0) * 2.2;
+  float specBroad = pow(NdotH, 28.0) * 0.35;
+  liquidColor += vec3(1.0, 0.98, 0.92) * (specSharp + specBroad);
+
+  // Caustics
+  float causticMask = smoothstep(0.04, 0.10, mc) * smoothstep(0.01, 0.06, lap);
+  liquidColor += vec3(1.0, 0.95, 0.82) * causticMask * 0.7;
+
+  // Cool tint on near-still pixels (very mild — don't darken the image)
+  float activity = clamp(abs(mc) * 6.0 + gradLen * 12.0, 0.0, 1.0);
+  vec3 stillTint = mix(vec3(0.99, 1.0, 1.04), vec3(1.0), activity);
+  liquidColor *= stillTint;
+
+  // ============================ CRYSTAL ============================
+  vec2 facetGrad = floor(grad * 18.0) / 18.0;
+  vec2 crystalOffset = facetGrad * 0.55 * uIntensity * aspectFix;
+  vec3 crystalColor = texture2D(uVideo, toVideoUv(vUv + crystalOffset)).rgb;
+
+  // Edge detect: neighbor facets differ
+  float dxL = (mc + 2.0 * ml + bc) - (tl + 2.0 * ml + bl);
+  float dyL = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
+  // Compare left, right, up neighbors of facet
+  vec2 gradL = vec2(
+    (tc + 2.0 * mc + bc) - (tl + 2.0 * ml + bl),
+    (ml + 2.0 * mc + mr) - (tl + 2.0 * tc + tr)
+  ) * 0.125;
+  vec2 gradR = vec2(
+    (tr + 2.0 * mr + br) - (tc + 2.0 * mc + bc),
+    (mc + 2.0 * mr + br) - (tc + 2.0 * tr + tr) * 0.0 + (tc + 2.0 * tr + tr)
+  ) * 0.125;
+  // Simpler/cleaner: compute facet at left and up neighbors
+  vec2 facetL = floor(vec2(
+    (tc + 2.0 * mc + bc) - (tl + 2.0 * ml + bl),
+    (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr)
+  ) * 0.125 * 18.0) / 18.0;
+  vec2 facetU = floor(vec2(
+    (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl),
+    (ml + 2.0 * mc + mr) - (tl + 2.0 * tc + tr)
+  ) * 0.125 * 18.0) / 18.0;
+  float edge = step(0.0001, length(facetGrad - facetL)) + step(0.0001, length(facetGrad - facetU));
+  edge = clamp(edge, 0.0, 1.0);
+  crystalColor += vec3(0.75, 0.90, 1.0) * edge * 0.45;
+
+  // Facet brightness by direction
+  float facetBright = 1.0 + (facetGrad.x * 0.6 + facetGrad.y * 0.4) * 1.8;
+  crystalColor *= clamp(facetBright, 0.55, 1.6);
+
+  // Slight cool tint
+  crystalColor *= vec3(0.95, 0.99, 1.08);
+
+  // ============================ MIX ============================
+  vec3 color = mix(liquidColor, crystalColor, step(0.5, uMode));
+
+  gl_FragColor = vec4(color, 1.0);
+}
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
+
+<script>
+(() => {
+'use strict';
+
+// ============================================================
+// Error display
+// ============================================================
+const errEl = document.getElementById('error');
+function fail(title, detail) {
+  errEl.style.display = 'block';
+  errEl.textContent = '[ ' + title + ' ]\n\n' + (detail || '');
+  document.getElementById('loading').classList.add('hidden');
+  console.error(title, detail);
+}
+window.addEventListener('error', e => fail('Runtime Error', (e.error && e.error.stack) || e.message));
+
+// ============================================================
+// DOM
+// ============================================================
+const canvas = document.getElementById('canvas');
+const video  = document.getElementById('video');
+const loading = document.getElementById('loading');
+
+const ui = {
+  intensity: document.getElementById('intensity'),
+  radius:    document.getElementById('radius'),
+  decay:     document.getElementById('decay'),
+  modeLiquid: document.getElementById('modeLiquid'),
+  modeCrystal:document.getElementById('modeCrystal'),
+  switchCam: document.getElementById('switchCam'),
+  hideUi:    document.getElementById('hideUi'),
+  topUi:     document.getElementById('topUi'),
+  bottomUi:  document.getElementById('bottomUi'),
+  showUiBtn: document.getElementById('showUiBtn'),
+};
+
+let mode = 0; // 0 liquid, 1 crystal
+ui.modeLiquid.addEventListener('click', () => {
+  mode = 0;
+  ui.modeLiquid.classList.add('active');
+  ui.modeCrystal.classList.remove('active');
+});
+ui.modeCrystal.addEventListener('click', () => {
+  mode = 1;
+  ui.modeCrystal.classList.add('active');
+  ui.modeLiquid.classList.remove('active');
+});
+
+function bindSliderReadout(input, readout, digits) {
+  const fmt = () => { readout.textContent = parseFloat(input.value).toFixed(digits); };
+  input.addEventListener('input', fmt);
+  fmt();
+}
+bindSliderReadout(ui.intensity, document.getElementById('intensityVal'), 2);
+bindSliderReadout(ui.radius,    document.getElementById('radiusVal'),    2);
+bindSliderReadout(ui.decay,     document.getElementById('decayVal'),     3);
+
+ui.hideUi.addEventListener('click', () => {
+  ui.topUi.classList.add('hidden-ui');
+  ui.bottomUi.classList.add('hidden-ui');
+  ui.showUiBtn.classList.add('visible');
+});
+ui.showUiBtn.addEventListener('click', () => {
+  ui.topUi.classList.remove('hidden-ui');
+  ui.bottomUi.classList.remove('hidden-ui');
+  ui.showUiBtn.classList.remove('visible');
+});
+
+// ============================================================
+// WebGL setup
+// ============================================================
+const gl = canvas.getContext('webgl', {
+  alpha: false,
+  antialias: false,
+  depth: false,
+  stencil: false,
+  preserveDrawingBuffer: false,
+  premultipliedAlpha: false,
+});
+if (!gl) {
+  fail('WebGL not supported',
+    'Your browser does not expose a WebGL1 context. Try a recent Chrome/Safari.');
+  return;
+}
+
+// Extensions
+const extHF = gl.getExtension('OES_texture_half_float');
+const extHFL = gl.getExtension('OES_texture_half_float_linear');
+const extF  = gl.getExtension('OES_texture_float');
+const extFL = gl.getExtension('OES_texture_float_linear');
+
+let physicsType, physicsTypeName;
+if (extHF) { physicsType = extHF.HALF_FLOAT_OES; physicsTypeName = 'HALF_FLOAT'; }
+else if (extF) { physicsType = gl.FLOAT; physicsTypeName = 'FLOAT'; }
+else {
+  physicsType = gl.UNSIGNED_BYTE; physicsTypeName = 'UNSIGNED_BYTE';
+}
+
+const physicsFilter = (
+  (physicsType === extHF?.HALF_FLOAT_OES && extHFL) ||
+  (physicsType === gl.FLOAT && extFL) ||
+  (physicsType === gl.UNSIGNED_BYTE)
+) ? gl.LINEAR : gl.NEAREST;
+
+// ============================================================
+// Shader compile
+// ============================================================
+function compile(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(sh);
+    const kind = (type === gl.VERTEX_SHADER) ? 'vertex' : 'fragment';
+    fail(kind + ' shader compile failed', log + '\n\n' + src.split('\n').map((l,i)=>(i+1)+': '+l).join('\n'));
+    throw new Error(log);
+  }
+  return sh;
+}
+function program(vsSrc, fsSrc) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsSrc));
+  gl.bindAttribLocation(p, 0, 'aPosition');
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    fail('Program link failed', gl.getProgramInfoLog(p));
+    throw new Error('link');
+  }
+  return p;
+}
+
+const vsSrc = document.getElementById('vs-quad').textContent;
+const physicsProgram = program(vsSrc, document.getElementById('fs-physics').textContent);
+const renderProgram  = program(vsSrc, document.getElementById('fs-render').textContent);
+
+// Quad VBO
+const quadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+  -1,-1,  1,-1,  -1,1,
+  -1, 1,  1,-1,   1,1
+]), gl.STATIC_DRAW);
+
+function drawQuad() {
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+}
+
+// Uniform locations
+function getUniforms(prog, names) {
+  const map = {};
+  for (const n of names) map[n] = gl.getUniformLocation(prog, n);
+  return map;
+}
+const Up = getUniforms(physicsProgram, [
+  'uCurrent', 'uPrev', 'uResolution', 'uDamping',
+  'uRadius', 'uAspect', 'uTime', 'uFingers', 'uPrevFingers'
+]);
+const Ur = getUniforms(renderProgram, [
+  'uPhysics', 'uVideo', 'uResolution', 'uPhysicsRes',
+  'uVideoScale', 'uIntensity', 'uMirror', 'uMode'
+]);
+
+// ============================================================
+// Textures & FBOs
+// ============================================================
+function createTex(w, h, internalFormat, type, filter, data) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, w, h, 0, internalFormat, type, data || null);
+  return t;
+}
+
+function createFBO(w, h) {
+  const tex = createTex(w, h, gl.RGBA, physicsType, physicsFilter, null);
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+  if (status !== gl.FRAMEBUFFER_COMPLETE) {
+    fail('FBO incomplete', 'status = 0x' + status.toString(16) + ', type = ' + physicsTypeName + ', size = ' + w + 'x' + h);
+    throw new Error('FBO incomplete');
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { tex, fbo, w, h };
+}
+
+let physicsFBOs = []; // ring of 3
+let physicsW = 0, physicsH = 0;
+let videoTex = null;
+let videoTexW = 0, videoTexH = 0;
+
+function clearFbo(fbo) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.clearColor(0, 0, 0, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+function destroyFBOs() {
+  for (const f of physicsFBOs) {
+    gl.deleteTexture(f.tex);
+    gl.deleteFramebuffer(f.fbo);
+  }
+  physicsFBOs = [];
+}
+
+function rebuildFBOs(w, h) {
+  destroyFBOs();
+  physicsW = Math.max(2, Math.floor(w / 2));
+  physicsH = Math.max(2, Math.floor(h / 2));
+  for (let i = 0; i < 3; i++) {
+    const f = createFBO(physicsW, physicsH);
+    clearFbo(f.fbo);
+    physicsFBOs.push(f);
+  }
+}
+
+function ensureVideoTex(w, h) {
+  if (videoTex && w === videoTexW && h === videoTexH) return;
+  if (videoTex) gl.deleteTexture(videoTex);
+  videoTex = createTex(w, h, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR, null);
+  videoTexW = w; videoTexH = h;
+}
+
+// ============================================================
+// Resize
+// ============================================================
+let canvasW = 0, canvasH = 0;
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.floor(window.innerWidth * dpr);
+  const h = Math.floor(window.innerHeight * dpr);
+  if (w === canvasW && h === canvasH) return;
+  canvas.width = w;
+  canvas.height = h;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  canvasW = w; canvasH = h;
+  rebuildFBOs(w, h);
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', resize);
+resize();
+
+// ============================================================
+// Finger state (10 fingertips x [x, y, active])
+// ============================================================
+const fingers     = new Float32Array(30);
+const prevFingers = new Float32Array(30);
+let fingerActiveTimeout = []; // per-finger last-seen frame counter
+for (let i = 0; i < 10; i++) fingerActiveTimeout[i] = 0;
+let frameCount = 0;
+
+function clearFingers() {
+  fingers.fill(0);
+  prevFingers.fill(0);
+}
+
+// ============================================================
+// Camera + MediaPipe
+// ============================================================
+let currentFacingMode = 'user';
+let currentStream = null;
+let videoScale = [1, 1];
+
+async function startCamera(facing) {
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop());
+    currentStream = null;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: facing,
+        width:  { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    });
+    currentStream = stream;
+    video.srcObject = stream;
+    await new Promise((res, rej) => {
+      const ok = () => { video.removeEventListener('loadedmetadata', ok); res(); };
+      video.addEventListener('loadedmetadata', ok);
+      setTimeout(() => rej(new Error('video loadedmetadata timeout')), 8000);
+    });
+    await video.play().catch(() => {});
+    currentFacingMode = facing;
+    clearFingers();
+  } catch (e) {
+    fail('Camera unavailable',
+      String(e && e.message || e) +
+      '\n\nIf you are opening this from file:// the camera will not work — serve it over https or http://localhost.');
+    throw e;
+  }
+}
+
+let hands = null;
+let handsReady = false;
+let handsBusy = false;
+
+async function initHands() {
+  if (typeof Hands === 'undefined') {
+    console.warn('MediaPipe Hands library failed to load; running without hand input.');
+    return;
+  }
+  try {
+    hands = new Hands({
+      locateFile: (file) => 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/' + file,
+    });
+    hands.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 0,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+    hands.onResults(onHandResults);
+    await hands.initialize();
+    handsReady = true;
+  } catch (e) {
+    console.warn('MediaPipe init failed:', e);
+    handsReady = false;
+  }
+}
+
+const TIP_INDICES = [4, 8, 12, 16, 20];
+
+function onHandResults(results) {
+  handsBusy = false;
+  // mark all inactive first; we re-activate the ones present.
+  // (We don't want to spam clear if some hand was lost; just decay.)
+  // Build a list of detected fingertips:
+  const detected = []; // each: { x, y } in display-screen UV space
+  if (results && results.multiHandLandmarks) {
+    for (let h = 0; h < results.multiHandLandmarks.length && h < 2; h++) {
+      const lms = results.multiHandLandmarks[h];
+      for (let k = 0; k < TIP_INDICES.length; k++) {
+        const lm = lms[TIP_INDICES[k]];
+        if (!lm) continue;
+        // raw x/y are normalised within the video frame
+        let sx = (lm.x - 0.5) / videoScale[0] + 0.5;
+        let sy = (lm.y - 0.5) / videoScale[1] + 0.5;
+        // Mirror for front camera
+        if (currentFacingMode === 'user') sx = 1.0 - sx;
+        detected.push({ x: sx, y: 1.0 - sy }); // flip Y to match GL UV (origin bottom-left)
+      }
+    }
+  }
+
+  // Pack first 10 into fingers array
+  // Strategy: greedy nearest-neighbour with previous frame to maintain identity
+  // (simple approach: just dump in order, MediaPipe is fairly stable per-hand)
+  for (let i = 0; i < 10; i++) {
+    if (i < detected.length) {
+      fingers[i * 3 + 0] = detected[i].x;
+      fingers[i * 3 + 1] = detected[i].y;
+      fingers[i * 3 + 2] = 1.0;
+      fingerActiveTimeout[i] = frameCount;
+    } else {
+      // decay
+      if (frameCount - fingerActiveTimeout[i] > 6) {
+        fingers[i * 3 + 2] = 0.0;
+      }
+    }
+  }
+}
+
+// ============================================================
+// Compute videoScale for "cover" fit
+// ============================================================
+function updateVideoScale() {
+  if (!video.videoWidth || !video.videoHeight) return;
+  const va = video.videoWidth / video.videoHeight;
+  const ca = canvas.width / canvas.height;
+  if (va > ca) {
+    // video wider than canvas: crop sides
+    videoScale = [ca / va, 1];
+  } else {
+    videoScale = [1, va / ca];
+  }
+}
+
+// ============================================================
+// Main loop
+// ============================================================
+let last = performance.now();
+
+function frame(now) {
+  frameCount++;
+  const t = (now - last) * 0.001;
+  last = now;
+  resize();
+  updateVideoScale();
+
+  // Upload video to GL
+  if (video.readyState >= 2 && video.videoWidth > 0) {
+    ensureVideoTex(video.videoWidth, video.videoHeight);
+    gl.bindTexture(gl.TEXTURE_2D, videoTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    try {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    } catch (e) {
+      // some browsers throw if video isn't ready; ignore one frame
+    }
+  }
+
+  // Throttle MediaPipe: send roughly every other frame
+  if (handsReady && !handsBusy && video.readyState >= 2 && (frameCount & 1) === 0) {
+    handsBusy = true;
+    hands.send({ image: video }).catch(() => { handsBusy = false; });
+  }
+
+  // ----- Physics step -----
+  const cur  = physicsFBOs[frameCount % 3];
+  const prv  = physicsFBOs[(frameCount + 2) % 3];
+  const dst  = physicsFBOs[(frameCount + 1) % 3];
+
+  gl.useProgram(physicsProgram);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+  gl.viewport(0, 0, physicsW, physicsH);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, cur.tex);
+  gl.uniform1i(Up.uCurrent, 0);
+
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, prv.tex);
+  gl.uniform1i(Up.uPrev, 1);
+
+  gl.uniform2f(Up.uResolution, physicsW, physicsH);
+  gl.uniform1f(Up.uDamping, parseFloat(ui.decay.value));
+  gl.uniform1f(Up.uRadius,  parseFloat(ui.radius.value));
+  gl.uniform1f(Up.uAspect,  physicsW / physicsH);
+  gl.uniform1f(Up.uTime,    now * 0.001);
+  gl.uniform3fv(Up.uFingers,     fingers);
+  gl.uniform3fv(Up.uPrevFingers, prevFingers);
+
+  drawQuad();
+
+  prevFingers.set(fingers);
+
+  // ----- Render to screen -----
+  gl.useProgram(renderProgram);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvasW, canvasH);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, dst.tex);
+  gl.uniform1i(Ur.uPhysics, 0);
+
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, videoTex || dst.tex);
+  gl.uniform1i(Ur.uVideo, 1);
+
+  gl.uniform2f(Ur.uResolution, canvasW, canvasH);
+  gl.uniform2f(Ur.uPhysicsRes, physicsW, physicsH);
+  gl.uniform2f(Ur.uVideoScale, videoScale[0], videoScale[1]);
+  gl.uniform1f(Ur.uIntensity, parseFloat(ui.intensity.value));
+  gl.uniform1f(Ur.uMirror, currentFacingMode === 'user' ? 1.0 : 0.0);
+  gl.uniform1f(Ur.uMode, mode);
+
+  drawQuad();
+
+  requestAnimationFrame(frame);
+}
+
+// ============================================================
+// Pointer fallback (mouse/touch) -> finger slot 0
+// ============================================================
+let pointerActive = false;
+function pointerToFinger(e) {
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width;
+  const y = 1.0 - (e.clientY - rect.top) / rect.height;
+  fingers[0] = x; fingers[1] = y; fingers[2] = 1.0;
+  fingerActiveTimeout[0] = frameCount;
+}
+canvas.addEventListener('pointerdown', e => {
+  pointerActive = true;
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+  pointerToFinger(e);
+});
+canvas.addEventListener('pointermove', e => {
+  if (!pointerActive) return;
+  pointerToFinger(e);
+});
+canvas.addEventListener('pointerup', () => {
+  pointerActive = false;
+  fingers[2] = 0.0;
+});
+canvas.addEventListener('pointercancel', () => {
+  pointerActive = false;
+  fingers[2] = 0.0;
+});
+
+// ============================================================
+// Camera switch button
+// ============================================================
+ui.switchCam.addEventListener('click', async () => {
+  const next = (currentFacingMode === 'user') ? 'environment' : 'user';
+  try {
+    await startCamera(next);
+  } catch (_) {
+    // already reported
+  }
+});
+
+// ============================================================
+// Boot
+// ============================================================
+(async () => {
+  try {
+    await startCamera('user');
+    await initHands();
+    requestAnimationFrame(frame);
+    setTimeout(() => loading.classList.add('hidden'), 400);
+  } catch (e) {
+    // error already shown
+  }
+})();
+
+})();
+</script>
+
+</body>
+</html>
