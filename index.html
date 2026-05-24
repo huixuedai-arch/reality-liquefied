@@ -166,9 +166,9 @@
     <button id="modeCrystal">CRYSTAL</button>
   </div>
   <div class="sliders">
-    <label><span class="name">INTENSITY</span><input id="intensity" type="range" min="0.1" max="3.0" step="0.01" value="1.0"><span class="val" id="intensityVal">1.00</span></label>
-    <label><span class="name">RADIUS</span><input id="radius" type="range" min="0.2" max="4.0" step="0.01" value="1.0"><span class="val" id="radiusVal">1.00</span></label>
-    <label><span class="name">DECAY</span><input id="decay" type="range" min="0.85" max="0.995" step="0.001" value="0.985"><span class="val" id="decayVal">0.985</span></label>
+    <label><span class="name">INTENSITY</span><input id="intensity" type="range" min="0.1" max="3.0" step="0.01" value="1.8"><span class="val" id="intensityVal">1.80</span></label>
+    <label><span class="name">RADIUS</span><input id="radius" type="range" min="0.2" max="4.0" step="0.01" value="0.7"><span class="val" id="radiusVal">0.70</span></label>
+    <label><span class="name">DECAY</span><input id="decay" type="range" min="0.85" max="0.995" step="0.001" value="0.976"><span class="val" id="decayVal">0.976</span></label>
   </div>
 </div>
 
@@ -232,15 +232,14 @@ void main() {
   // Localization: blend neighbor avg toward the centre value to suppress
   // wave propagation. 0.0 = full propagation, 1.0 = pure local oscillation.
   // Higher value => ripples stay near where they were created (per-finger blobs)
-  const float LOCALIZE = 0.88;
+  const float LOCALIZE = 0.05;
   float coupled = mix(avg, c, LOCALIZE);
 
   // Verlet
   float val = coupled * 2.0 - prev;
 
   // Non-linear amplitude-dependent damping
-  // Higher threshold => large blobs stay rigid longer (more "mercury" feel)
-  float ampFactor = 1.0 - smoothstep(0.0, 0.25, abs(val)) * 0.006;
+  float ampFactor = 1.0 - smoothstep(0.0, 0.08, abs(val)) * 0.006;
   val *= uDamping * ampFactor;
 
   // Ambient noise (very low amplitude)
@@ -259,7 +258,23 @@ void main() {
 
     // velocity in approximate pixel units
     float velPx = length(fa - fb) * uResolution.y;
-    float strength = 0.6 + clamp(velPx * 0.012, 0.0, 1.2);
+
+    // Force model — four contributions:
+    //   1) touchImpulse: BIG single-frame push the moment a finger first appears.
+    //   2) velocity force: while sliding, each new pixel gets pushed.
+    //   3) pulse force: a low-frequency sinusoidal oscillation per finger,
+    //      different phase per finger, so a *stationary* finger keeps radiating
+    //      small ripples (like a fingertip lightly trembling on the surface).
+    //   4) tiny constant base so the finger position is always visible.
+    float touchImpulse = step(0.5, uFingers[i].z - uPrevFingers[i].z);
+
+    // Per-finger pulse, ~4 Hz, signed so it pushes down then pulls up — this is
+    // what produces concentric expanding rings under a still finger.
+    float pulse = sin(uTime * 8.0 + float(i) * 1.7) * 0.35;
+
+    float strength = clamp(velPx * 0.025, 0.0, 1.0)       // velocity trail
+                   + touchImpulse * 0.55                   // first-touch kick
+                   + pulse;                                 // continuous radiate
 
     float dist = capsuleSDF(aspectUv, fa, fb, baseRadius);
     float falloff = smoothstep(baseRadius, -baseRadius * 0.5, dist);
@@ -267,9 +282,10 @@ void main() {
     force += strength * falloff;
   }
 
-  // clamp the total contribution to avoid 5-finger blow-up
-  force = clamp(force, 0.0, 2.4);
-  val += force * 0.18;
+  // Allow negative — the pulse term oscillates pos/neg to create true ring
+  // propagation. Clamp magnitude both sides to avoid 5-finger blow-up.
+  force = clamp(force, -3.0, 3.0);
+  val += force * 0.05;
 
   val = clamp(val, -1.2, 1.2);
 
@@ -295,6 +311,39 @@ vec2 toVideoUv(vec2 uv) {
   vec2 v = (uv - 0.5) * uVideoScale + 0.5;
   v.x = mix(v.x, 1.0 - v.x, uMirror);
   return v;
+}
+
+float hashR(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+vec2 hash2R(vec2 p) {
+  return fract(sin(vec2(
+    dot(p, vec2(127.1, 311.7)),
+    dot(p, vec2(269.5, 183.3))
+  )) * 43758.5453);
+}
+
+// Voronoi-style droplet field. Returns:
+//   .xy = vector from this pixel toward the nearest cell centre
+//   .z  = sqrt distance to that centre (0 at centre, ~1 at far edge)
+vec3 droplet(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 best = vec2(0.0);
+  float bestD = 9.0;
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec2 g = vec2(float(x), float(y));
+      vec2 o = hash2R(i + g);
+      vec2 r = g + o - f;
+      float d = dot(r, r);
+      if (d < bestD) {
+        bestD = d;
+        best = r;
+      }
+    }
+  }
+  return vec3(-best, sqrt(bestD));
 }
 
 void main() {
@@ -324,77 +373,95 @@ void main() {
   // ============================ LIQUID ============================
   vec2 aspectFix = vec2(1.0 / aspect, 1.0);
 
-  vec2 refractOffset = grad * 0.55 * uIntensity * aspectFix;
+  // ---- Layer 1: bathroom-mirror condensation (default state) ----
+  // Dense Voronoi droplet field. Each cell is a tiny round bead stuck to
+  // the glass. Inside a bead the image is pulled TOWARD the bead centre
+  // (convex-lens magnification). The rim is drawn at a fixed radius from
+  // the centre so beads read as circles, not as cell-boundary polygons.
+  vec3 cell = droplet(vUv * vec2(aspect, 1.0) * 180.0);
+  vec2 cellDir = cell.xy;     // points OUTward (from centre toward pixel)
+  float cellDist = cell.z;    // 0 at centre, grows toward neighbours
 
+  // Convex-lens magnification: displace UV TOWARD the cell centre
+  vec2 dropletRefract = -cellDir * 0.015 * smoothstep(0.55, 0.05, cellDist);
+  vec2 hazeCenter = vUv + dropletRefract;
+
+  // Wider box blur on top for general fogginess between beads
+  vec2 he  = vec2(0.0040, 0.0040 * aspect);
+  vec2 he2 = vec2(0.0075, 0.0075 * aspect);
+  vec3 hazyBase  = texture2D(uVideo, toVideoUv(hazeCenter)).rgb * 1.4;
+  hazyBase += texture2D(uVideo, toVideoUv(hazeCenter + vec2( he.x,  he.y))).rgb;
+  hazyBase += texture2D(uVideo, toVideoUv(hazeCenter + vec2(-he.x,  he.y))).rgb;
+  hazyBase += texture2D(uVideo, toVideoUv(hazeCenter + vec2( he.x, -he.y))).rgb;
+  hazyBase += texture2D(uVideo, toVideoUv(hazeCenter + vec2(-he.x, -he.y))).rgb;
+  hazyBase += texture2D(uVideo, toVideoUv(hazeCenter + vec2( he2.x, 0.0))).rgb * 0.7;
+  hazyBase += texture2D(uVideo, toVideoUv(hazeCenter + vec2(-he2.x, 0.0))).rgb * 0.7;
+  hazyBase += texture2D(uVideo, toVideoUv(hazeCenter + vec2(0.0,  he2.y))).rgb * 0.7;
+  hazyBase += texture2D(uVideo, toVideoUv(hazeCenter + vec2(0.0, -he2.y))).rgb * 0.7;
+  hazyBase /= 8.2;
+
+  // Heavy desaturate + warm-grey frost (condensation reads as milky-white)
+  float hazyLum = dot(hazyBase, vec3(0.299, 0.587, 0.114));
+  hazyBase = mix(hazyBase, vec3(hazyLum), 0.65);
+  hazyBase = mix(hazyBase, vec3(0.90, 0.92, 0.94), 0.55);
+
+  // Circular bead rim at fixed radius from cell centre.
+  float rim = smoothstep(0.30, 0.40, cellDist) * (1.0 - smoothstep(0.40, 0.48, cellDist));
+  hazyBase += vec3(0.08, 0.085, 0.09) * rim;
+
+  // Tiny dark dot at the very centre of each bead — reads as bead nucleus
+  float core = 1.0 - smoothstep(0.0, 0.05, cellDist);
+  hazyBase -= vec3(0.02) * core;
+
+  // ---- Layer 2: sharp lensed (what shows where waves displace) ----
+  vec2 refractOffset = grad * 0.55 * uIntensity * aspectFix;
   vec2 gradNorm = gradLen > 1e-6 ? grad / gradLen : vec2(0.0);
   vec2 lensOffset = gradNorm * lap * 0.18 * uIntensity * aspectFix;
-
   vec2 totalOffset = refractOffset + lensOffset;
 
-  float dispersion = 0.015 + clamp(gradLen * 0.20, 0.0, 0.14);
-  vec2 offR = totalOffset * (1.0 + dispersion);
-  vec2 offG = totalOffset;
-  vec2 offB = totalOffset * (1.0 - dispersion);
+  // Single sharp sample — no dispersion, no soft blur
+  vec3 sharpLensed = texture2D(uVideo, toVideoUv(vUv + totalOffset)).rgb;
 
-  vec2 tangent = vec2(-totalOffset.y, totalOffset.x) * 0.15;
-
-  // 3-tap soft sample along tangent of offset direction per channel
-  float rC = (
-    texture2D(uVideo, toVideoUv(vUv + offR - tangent)).r +
-    texture2D(uVideo, toVideoUv(vUv + offR)).r +
-    texture2D(uVideo, toVideoUv(vUv + offR + tangent)).r
-  ) / 3.0;
-  float gC = (
-    texture2D(uVideo, toVideoUv(vUv + offG - tangent)).g +
-    texture2D(uVideo, toVideoUv(vUv + offG)).g +
-    texture2D(uVideo, toVideoUv(vUv + offG + tangent)).g
-  ) / 3.0;
-  float bC = (
-    texture2D(uVideo, toVideoUv(vUv + offB - tangent)).b +
-    texture2D(uVideo, toVideoUv(vUv + offB)).b +
-    texture2D(uVideo, toVideoUv(vUv + offB + tangent)).b
-  ) / 3.0;
-
-  vec3 liquidColor = vec3(rC, gC, bC);
-
-  // Brightness from wave depth
+  // Wave-depth brightness (preserves underlying colour, no tint)
   float bright = 1.0 + clamp(mc * 2.2, -0.38, 0.45);
-  liquidColor *= bright;
+  sharpLensed *= bright;
 
-  // Crest warm, trough cool
-  if (mc > 0.0) {
-    liquidColor = mix(liquidColor, liquidColor * vec3(1.06, 1.02, 0.94), clamp(mc * 3.0, 0.0, 1.0));
-  } else {
-    liquidColor = mix(liquidColor, liquidColor * vec3(0.78, 0.90, 1.08), clamp(-mc * 3.0, 0.0, 1.0));
-  }
-
-  // Normal for Fresnel + specular
+  // Surface normal for Fresnel + specular
   vec3 normal = normalize(vec3(-grad.x, -grad.y, 0.8 / (uIntensity + 0.01)));
   vec3 viewDir = vec3(0.0, 0.0, 1.0);
   float cosTheta = max(dot(normal, viewDir), 0.0);
   float fresnel = 0.02 + 0.98 * pow(1.0 - cosTheta, 5.0);
 
+  // Fresnel reflection — sample further along inverse offset, no tint
   vec2 reflOff = totalOffset * -1.6 * aspectFix;
   vec3 reflColor = texture2D(uVideo, toVideoUv(vUv + reflOff)).rgb;
-  reflColor = mix(reflColor, reflColor * vec3(0.78, 0.90, 1.18) + vec3(0.0, 0.02, 0.05), 0.55);
-  liquidColor = mix(liquidColor, reflColor, fresnel * 0.5);
+  sharpLensed = mix(sharpLensed, reflColor, fresnel * 0.45);
 
-  // Specular (twin-lobe)
+  // ---- Edge ridge highlight (the "pink rim" in the reference) ----
+  // It is NOT a fixed colour: we sample whatever the lens is magnifying
+  // and amplify it. Hand -> pink. Wall -> white. Window -> blue-white.
+  float ridge = pow(clamp(gradLen * 7.5, 0.0, 1.6), 2.0);
+  vec3 ridgeSample = texture2D(uVideo, toVideoUv(vUv + totalOffset * 0.6)).rgb;
+  sharpLensed += ridgeSample * ridge * 1.10;
+
+  // ---- Specular gain (twin-lobe) — same idea: brighten the underlying
+  // colour, don't tint it ----
   vec3 lightDir = normalize(vec3(0.4, 0.7, 1.0));
   vec3 halfDir = normalize(lightDir + viewDir);
   float NdotH = max(dot(normal, halfDir), 0.0);
-  float specSharp = pow(NdotH, 180.0) * 2.2;
-  float specBroad = pow(NdotH, 28.0) * 0.35;
-  liquidColor += vec3(1.0, 0.98, 0.92) * (specSharp + specBroad);
+  float specGain = pow(NdotH, 180.0) * 1.6 + pow(NdotH, 28.0) * 0.28;
+  vec3 specSample = texture2D(uVideo, toVideoUv(vUv + totalOffset * 0.35)).rgb;
+  sharpLensed += specSample * specGain;
 
-  // Caustics
+  // Caustics at high curvature crests — same amplification pattern
   float causticMask = smoothstep(0.04, 0.10, mc) * smoothstep(0.01, 0.06, lap);
-  liquidColor += vec3(1.0, 0.95, 0.82) * causticMask * 0.7;
+  sharpLensed += sharpLensed * causticMask * 0.55;
 
-  // Cool tint on near-still pixels (very mild — don't darken the image)
-  float activity = clamp(abs(mc) * 6.0 + gradLen * 12.0, 0.0, 1.0);
-  vec3 stillTint = mix(vec3(0.99, 1.0, 1.04), vec3(1.0), activity);
-  liquidColor *= stillTint;
+  // ---- Final mix: still -> condensation, wave -> sharp lensed ----
+  // Moderate sensitivity — propagating ripples can clear the fog along
+  // their crest but the rest of the screen stays fogged.
+  float clarity = clamp(gradLen * 40.0 + abs(mc) * 12.0, 0.0, 1.0);
+  vec3 liquidColor = mix(hazyBase, sharpLensed, clarity);
 
   // ============================ CRYSTAL ============================
   vec2 facetGrad = floor(grad * 18.0) / 18.0;
