@@ -232,14 +232,15 @@ void main() {
   // Localization: blend neighbor avg toward the centre value to suppress
   // wave propagation. 0.0 = full propagation, 1.0 = pure local oscillation.
   // Higher value => ripples stay near where they were created (per-finger blobs)
-  const float LOCALIZE = 0.62;
+  const float LOCALIZE = 0.88;
   float coupled = mix(avg, c, LOCALIZE);
 
   // Verlet
   float val = coupled * 2.0 - prev;
 
   // Non-linear amplitude-dependent damping
-  float ampFactor = 1.0 - smoothstep(0.0, 0.08, abs(val)) * 0.006;
+  // Higher threshold => large blobs stay rigid longer (more "mercury" feel)
+  float ampFactor = 1.0 - smoothstep(0.0, 0.25, abs(val)) * 0.006;
   val *= uDamping * ampFactor;
 
   // Ambient noise (very low amplitude)
@@ -268,7 +269,7 @@ void main() {
 
   // clamp the total contribution to avoid 5-finger blow-up
   force = clamp(force, 0.0, 2.4);
-  val += force * 0.085;
+  val += force * 0.18;
 
   val = clamp(val, -1.2, 1.2);
 
