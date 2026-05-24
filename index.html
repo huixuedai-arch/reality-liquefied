@@ -820,7 +820,7 @@ let handsBusy = false;
 
 async function initHands() {
   if (typeof Hands === 'undefined') {
-    console.warn('MediaPipe Hands library failed to load; running without hand input.');
+    console.warn('MediaPipe Hands library failed to load; running with touch input only.');
     return;
   }
   try {
@@ -834,10 +834,17 @@ async function initHands() {
       minTrackingConfidence: 0.5,
     });
     hands.onResults(onHandResults);
-    await hands.initialize();
+
+    // Race initialize() against a timeout — on iOS Safari/Chrome the wasm
+    // load can hang silently for tens of seconds (or forever) on a slow
+    // network, and we don't want the loading screen to stay up.
+    await Promise.race([
+      hands.initialize(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('hands init timeout (15s)')), 15000)),
+    ]);
     handsReady = true;
   } catch (e) {
-    console.warn('MediaPipe init failed:', e);
+    console.warn('MediaPipe init failed or timed out:', e);
     handsReady = false;
   }
 }
@@ -1028,12 +1035,26 @@ ui.switchCam.addEventListener('click', async () => {
 // ============================================================
 // Boot
 // ============================================================
+function setLoadingText(t) { loading.textContent = t; }
+
 (async () => {
   try {
+    setLoadingText('Requesting camera…');
     await startCamera('user');
-    await initHands();
+
+    // Camera is up — start rendering immediately. Hand tracking is loaded
+    // in the background; until it's ready (or if it fails / times out) the
+    // user can still play using touch/pointer. On iOS Safari/Chrome the
+    // MediaPipe wasm download can take a while, so we don't block on it.
+    setLoadingText('Loading hand tracking…');
     requestAnimationFrame(frame);
-    setTimeout(() => loading.classList.add('hidden'), 400);
+    setTimeout(() => loading.classList.add('hidden'), 600);
+
+    initHands().then(() => {
+      if (!handsReady) {
+        console.info('Touch / pointer input only (no hand tracking).');
+      }
+    });
   } catch (e) {
     // error already shown
   }
